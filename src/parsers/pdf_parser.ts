@@ -1,11 +1,21 @@
-import { Parser } from './mod.ts'
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import { Parser } from './mod.ts'
 
 type PDFDocument = Awaited<ReturnType<typeof pdfjsLib.getDocument>['promise']>;
+
+interface PDFParserConfig {
+  input_path: string
+}
 
 interface PageResult {
   page_number: number;
   text: string;
+}
+
+interface TextItem {
+  str: string;
+  x: number;
+  y: number;
 }
 
 /**
@@ -16,23 +26,23 @@ export class PDFParser extends Parser {
   /**
    * Main parsing method - orchestrates the entire process
    */
-  async parse(): Promise<string> {
-    const pdf_data = await this.read_pdf_file();
+  async parse(input_path: string): Promise<string> {
+    const pdf_data = await this.read_pdf_file(input_path);
     const pdf_document = await this.load_pdf_document(pdf_data);
     const total_pages = this.get_page_count(pdf_document);
     const results = await this.process_all_pages(pdf_document, total_pages);
     const full_text = this.combine_results(results);
-    this.print_summary(results);
     await Deno.writeTextFile('debug.txt', full_text)
+    this.print_summary(results);
     return full_text;
   }
 
   /**
    * Step 1: Read the PDF file from disk
    */
-  private async read_pdf_file(): Promise<ArrayBuffer> {
-    console.log(`📄 Reading PDF file: ${this.config.input_path}`);
-    const pdf_data = await Deno.readFile(this.config.input_path);
+  private async read_pdf_file(input_path: string): Promise<ArrayBuffer> {
+    this.ctx.log.debug(`Reading PDF file: ${input_path}`);
+    const pdf_data = await Deno.readFile(input_path);
     return pdf_data.buffer;
   }
 
@@ -52,7 +62,7 @@ export class PDFParser extends Parser {
    */
   private get_page_count(pdf_document: PDFDocument): number {
     const total_pages = pdf_document.numPages;
-    console.log(`📊 Total pages: ${total_pages}`);
+    this.ctx.log.debug(`Total pages: ${total_pages}`);
     return total_pages;
   }
 
@@ -78,18 +88,20 @@ export class PDFParser extends Parser {
     page_num: number,
     total_pages: number
   ): Promise<PageResult> {
-    console.log(`\n🔄 Processing page ${page_num}/${total_pages}...`);
+    this.ctx.log.debug(`\nProcessing page ${page_num}/${total_pages}...`);
 
     try {
       const extracted_text = await this.extract_text_from_page(pdf_document, page_num);
-      console.log(`  └─ ✓ Text extracted (${extracted_text.length} characters)`);
+      this.ctx.log.debug(`  └─ ✓ Text extracted (${extracted_text.length} characters)`);
       
       return {
         page_number: page_num,
         text: extracted_text,
       };
     } catch (error) {
-      return this.handle_page_error(page_num, error);
+      const error_message = error instanceof Error ? error.message : String(error);
+      console.error(`  └─ ✗ Error processing page ${page_num}:`, error_message);
+      throw error
     }
   }
 
@@ -100,52 +112,76 @@ export class PDFParser extends Parser {
     const page = await pdf_document.getPage(page_num);
     const text_content = await page.getTextContent();
     
-    // Build text with proper line breaks based on y-coordinate changes
-    let last_y = -1;
-    const lines: string[] = [];
-    let current_line = '';
+    // Extract all text items with their positions
+    const text_items: TextItem[] = [];
     
     for (const item of text_content.items) {
       if ('str' in item && 'transform' in item) {
-        const current_y = item.transform[5]; // y-coordinate
-        
-        // If y-coordinate changed significantly, we're on a new line
-        if (last_y !== -1 && Math.abs(current_y - last_y) > 5) {
-          if (current_line.trim()) {
-            lines.push(current_line.trim());
-          }
-          current_line = item.str;
-        } else {
-          // Same line, add a space if needed
-          if (current_line && !current_line.endsWith(' ') && item.str && !item.str.startsWith(' ')) {
-            current_line += ' ';
-          }
-          current_line += item.str;
-        }
-        
-        last_y = current_y;
+        text_items.push({
+          str: item.str,
+          x: item.transform[4], // x-coordinate
+          y: item.transform[5], // y-coordinate
+        });
       }
     }
     
+    // Sort items by reading order: top to bottom (descending y), then left to right (ascending x)
+    text_items.sort((a, b) => {
+      // Sort by y-coordinate first (top to bottom, so higher y values first)
+      const y_diff = b.y - a.y;
+      if (Math.abs(y_diff) > 5) { // 5 pixel threshold for same line
+        return y_diff;
+      }
+      // If on same line, sort by x-coordinate (left to right)
+      return a.x - b.x;
+    });
+    
+    // Build lines by grouping items with similar y-coordinates
+    const lines: string[] = [];
+    let current_line: TextItem[] = [];
+    let last_y = -1;
+    
+    for (const item of text_items) {
+      // Check if we're on a new line
+      if (last_y !== -1 && Math.abs(item.y - last_y) > 5) {
+        // Finish current line
+        if (current_line.length > 0) {
+          lines.push(this.build_line_text(current_line));
+          current_line = [];
+        }
+      }
+      
+      current_line.push(item);
+      last_y = item.y;
+    }
+    
     // Add the last line
-    if (current_line.trim()) {
-      lines.push(current_line.trim());
+    if (current_line.length > 0) {
+      lines.push(this.build_line_text(current_line));
     }
     
     return lines.join('\n');
   }
 
   /**
-   * Handle errors that occur during page processing
+   * Build text from items on the same line
    */
-  private handle_page_error(page_num: number, error: unknown): PageResult {
-    const error_message = error instanceof Error ? error.message : String(error);
-    console.error(`  └─ ✗ Error processing page ${page_num}:`, error_message);
+  private build_line_text(line_items: TextItem[]): string {
+    // Items are already sorted by x-coordinate from extract_text_from_page
+    let result = '';
+    let last_x = -1;
+
+    for (const item of line_items) {
+      // Add spacing between text items if there's a significant gap
+      if (last_x !== -1 && item.x - last_x > 10) {
+        result += ' ';
+      }
+
+      result += item.str;
+      last_x = item.x + (item.str.length * 5); // Rough estimate of text width
+    }
     
-    return {
-      page_number: page_num,
-      text: `[Error processing page ${page_num}]`,
-    };
+    return result.trim();
   }
 
   /**
@@ -164,9 +200,8 @@ export class PDFParser extends Parser {
    */
   private print_summary(results: PageResult[]): void {
     const total_chars = results.reduce((sum, r) => sum + r.text.length, 0);
-    console.log(`✨ Processing Complete!`);
-    console.log(`   Total pages: ${results.length}`);
-    console.log(`   Total characters: ${total_chars}`);
+    this.ctx.log.debug(`Processing Complete!`);
+    this.ctx.log.debug(`   Total pages: ${results.length}`);
+    this.ctx.log.debug(`   Total characters: ${total_chars}`);
   }
 }
-
