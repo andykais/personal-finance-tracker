@@ -1,7 +1,6 @@
 import z from 'zod'
 import * as datetime from '@std/datetime'
 import { Parser } from './mod.ts'
-import { PDFParser } from "./pdf_parser.ts";
 import type { TransactionRecord, StatementRecord } from '@/ingestors/mod.ts'
 
 const SOURCE = 'chase_credit_card'
@@ -12,7 +11,8 @@ const REGEX = {
   transaction: /(?<transaction_name>.+?)\s+(?<transaction_amount>[\d.]+)$/,
   end_of_page: /Page \d+ of \d+/,
   statement_period: /Statement Date: (\d\d+\/\d\d\/\d\d)$/,
-  filename_date: /(?<year>\d\d\d\d)(?<month>\d\d)(?<day>\d\d)-/
+  filename_date: /(?<year>\d\d\d\d)(?<month>\d\d)(?<day>\d\d)-/,
+  filename_date_2: /(\d\d\d\d\d\d\d\d)-/,
 }
 
 const DATETIME_DAY_FORMAT = 'yyyy/MM/dd'
@@ -20,18 +20,12 @@ const DATETIME_DAY_FORMAT = 'yyyy/MM/dd'
 export class ChaseParser extends Parser {
 
   private parse_filename_date(filename: string) {
-    const filename_date_match = filename.match(REGEX.filename_date)
+    const filename_date_match = filename.match(REGEX.filename_date_2)
     if (filename_date_match === null) {
       throw new Error(`No match for chase filename date`)
     }
 
-    const {year, month, day} = z.object({
-      year: z.coerce.number(),
-      month: z.coerce.number(),
-      day: z.coerce.number(),
-    }).parse(filename_date_match.groups)
-
-    return datetime.parse(`${year.toString().padStart(4, '0')}/${month.toString().padStart(2, '0')}/${day.toString().padStart(2, '0')}`, `yyyy/MM/dd`)
+    return datetime.parse(filename_date_match[1], 'yyyyMMdd')
   }
 
   private validate_statement_period(statement_date: Date, line: string): Date | undefined {
@@ -48,6 +42,26 @@ export class ChaseParser extends Parser {
     }
 
     return statement_period
+  }
+
+  private parse_transaction_date(statement_date: Date, line: string): Date | undefined {
+    const transaction_date_match = line.match(REGEX.transaction_date)
+
+    if (transaction_date_match === null || transaction_date_match.length !== 2) {
+      return
+    }
+
+    const transaction_date_str = transaction_date_match[1]
+
+    let year: number
+    // handle statements that start in december of the previous year
+    if (statement_date.getMonth() === 0 && transaction_date_str.startsWith('12') && transaction_date_str !== '12/01') {
+      year = statement_date.getFullYear() - 1
+    } else {
+      year = statement_date.getFullYear()
+    }
+    const transaction_date = datetime.parse(`${year}/${transaction_date_str}`, 'yyyy/MM/dd')
+    return transaction_date
   }
 
   parse(filename: string, text: string): StatementRecord {
@@ -76,12 +90,10 @@ export class ChaseParser extends Parser {
       }
 
 
-      const transaction_date_match = line.match(REGEX.transaction_date)
       let transaction_str: string
-
-      if (transaction_date_match !== null && transaction_date_match.length === 2) {
-        const transaction_date_str = transaction_date_match[1]
-        transaction_date = datetime.parse(statement_date.getFullYear() + '/' + transaction_date_str, 'yyyy/MM/dd')
+      const line_transaction_date = this.parse_transaction_date(statement_date, line)
+      if (line_transaction_date) {
+        transaction_date = line_transaction_date
         transaction_str = line.match(REGEX.transaction_date_and_transaction)![1]
       } else {
         transaction_str = line
@@ -112,9 +124,6 @@ export class ChaseParser extends Parser {
     if (transactions.length === 0) {
       throw new Error(`Possible parsing error. Statment had _no_ transactions?`)
     }
-
-    // these are mostly sorted already, but any "FEES CHARGED" will be added at the bottom
-    transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
 
     const stats = {
       transaction_count: transactions.length,

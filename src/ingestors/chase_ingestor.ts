@@ -30,6 +30,13 @@ export class ChaseIngestor extends Ingestor {
       const statement_transactions = this.chase_parser.parse(filename, pdf_text)
       transactions.push(...statement_transactions.transactions)
     }
+
+    // these are mostly sorted already, but any "FEES CHARGED" are added at the bottom of each statement
+    transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+    // for (const tr of transactions) {
+    //   console.log(tr.date)
+    // }
+
     return transactions
   }
 }

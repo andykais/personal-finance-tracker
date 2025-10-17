@@ -2,6 +2,7 @@ import { Context } from './context.ts'
 import { ChaseIngestor } from './ingestors/chase_ingestor.ts'
 import { CSVOutput } from './outputs/csv_output.ts'
 import { XLSXOutput } from './outputs/xlsx_output.ts'
+import { GoogleSheetsOutput } from './outputs/google_sheets_output.ts'
 
 /**
  * Main entry point
@@ -21,7 +22,7 @@ if (import.meta.main) {
   })
 
   const chase_ingestor = new ChaseIngestor(context)
-  const output = new XLSXOutput(context)
+  const output = new GoogleSheetsOutput(context)
   const transactions = await chase_ingestor.load()
   await output.write(transactions)
 }
