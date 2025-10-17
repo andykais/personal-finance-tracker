@@ -1,10 +1,12 @@
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { Parser } from './mod.ts'
+import { Context } from "../context.ts";
 
 type PDFDocument = Awaited<ReturnType<typeof pdfjsLib.getDocument>['promise']>;
 
-interface PDFParserConfig {
-  input_path: string
+interface PDFParserOptions {
+  /** font names to strip out (some things like qr codes and cause issues with parsing) */
+  strip_out_fonts?: string[]
 }
 
 interface PageResult {
@@ -22,6 +24,12 @@ interface TextItem {
  * Main class for PDF to text conversion
  */
 export class PDFParser extends Parser {
+  options: PDFParserOptions
+
+  constructor(context: Context, options?: PDFParserOptions) {
+    super(context)
+    this.options = options ?? {}
+  }
 
   /**
    * Main parsing method - orchestrates the entire process
@@ -117,6 +125,9 @@ export class PDFParser extends Parser {
     
     for (const item of text_content.items) {
       if ('str' in item && 'transform' in item) {
+        if (this.options.strip_out_fonts?.includes(item.fontName)) {
+          continue
+        }
         text_items.push({
           str: item.str,
           x: item.transform[4], // x-coordinate

@@ -3,6 +3,8 @@ import { ChaseIngestor } from './ingestors/chase_ingestor.ts'
 import { CSVOutput } from './outputs/csv_output.ts'
 import { XLSXOutput } from './outputs/xlsx_output.ts'
 import { GoogleSheetsOutput } from './outputs/google_sheets_output.ts'
+import { GlensFallsNationalBankIngestor } from "./ingestors/glens_falls_national_bank_ingestor.ts";
+import { type TransactionRecord } from "./ingestors/mod.ts";
 
 /**
  * Main entry point
@@ -21,8 +23,17 @@ if (import.meta.main) {
     log_level: 'DEBUG'
   })
 
-  const chase_ingestor = new ChaseIngestor(context)
+  const ingestors = [
+    // new ChaseIngestor(context),
+    new GlensFallsNationalBankIngestor(context)
+  ]
   const output = new GoogleSheetsOutput(context)
-  const transactions = await chase_ingestor.load()
-  await output.write(transactions)
+
+  const transactions: TransactionRecord[] = []
+  for (const ingestor of ingestors) {
+    context.log.info(`Ingesting ${ingestor.name} statements`)
+    const ingested_transactions = await ingestor.load()
+    transactions.push(...ingested_transactions)
+  }
+  // await output.write(transactions)
 }

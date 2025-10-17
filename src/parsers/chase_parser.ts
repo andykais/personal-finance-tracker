@@ -11,8 +11,7 @@ const REGEX = {
   transaction: /(?<transaction_name>.+?)\s+(?<transaction_amount>[\d.]+)$/,
   end_of_page: /Page \d+ of \d+/,
   statement_period: /Statement Date: (\d\d+\/\d\d\/\d\d)$/,
-  filename_date: /(?<year>\d\d\d\d)(?<month>\d\d)(?<day>\d\d)-/,
-  filename_date_2: /(\d\d\d\d\d\d\d\d)-/,
+  filename_date: /(\d\d\d\d\d\d\d\d)-/,
 }
 
 const DATETIME_DAY_FORMAT = 'yyyy/MM/dd'
@@ -20,7 +19,7 @@ const DATETIME_DAY_FORMAT = 'yyyy/MM/dd'
 export class ChaseParser extends Parser {
 
   private parse_filename_date(filename: string) {
-    const filename_date_match = filename.match(REGEX.filename_date_2)
+    const filename_date_match = filename.match(REGEX.filename_date)
     if (filename_date_match === null) {
       throw new Error(`No match for chase filename date`)
     }

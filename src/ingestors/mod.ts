@@ -15,6 +15,8 @@ export interface StatementRecord {
 
 
 export abstract class Ingestor {
+  abstract name: string
+
   constructor(public ctx: Context) {}
 
   abstract load(): Promise<TransactionRecord[]>
